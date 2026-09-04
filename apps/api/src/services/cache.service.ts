@@ -1,10 +1,6 @@
 import { redis } from '../redis'
 import { config } from '../config'
 
-// All caching logic in one place
-// Routes never touch Redis directly for caching
-// Cache behavior can be changed without touching routes
-
 export const CacheService = {
 
   async get<T>(key: string): Promise<T | null> {
