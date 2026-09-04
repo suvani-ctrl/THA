@@ -38,17 +38,12 @@ export function useSSE(
         // Connection dropped
         // Close current EventSource
         eventSource.close()
-
-        // Reconnect after 3 seconds
-        // EventSource has built-in reconnect but
-        // we add explicit reconnect for control
         reconnectTimeout = setTimeout(connect, 3000)
       }
     }
 
     connect()
 
-    // Cleanup on unmount
     return () => {
       clearTimeout(reconnectTimeout)
       eventSource.close()

@@ -1,4 +1,3 @@
-'use client'
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -22,7 +21,6 @@ export default function NewBatchPage() {
       let batchId: string
 
       if (mode === 'csv') {
-        // CSV upload path
         if (!file) {
           setError('Please select a CSV file')
           setLoading(false)
@@ -47,7 +45,6 @@ export default function NewBatchPage() {
         batchId = data.batch_id
 
       } else {
-        // Text paste path
         const urlList = urls
           .split('\n')
           .map(u => u.trim())
@@ -90,7 +87,6 @@ export default function NewBatchPage() {
     <div>
       <h1>New Batch</h1>
 
-      {/* Mode Toggle */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
         <button
           onClick={() => setMode('text')}
