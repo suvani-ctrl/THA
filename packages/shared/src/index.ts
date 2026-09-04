@@ -4,8 +4,6 @@ export type BatchStatus = 'pending' | 'running' | 'completed' | 'cancelled'
 
 export type UrlStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 
-// ─── Database Row Types ───────────────────────────────────
-
 export interface Batch {
   id: string
   status: BatchStatus
@@ -29,14 +27,12 @@ export interface UrlResult {
   updated_at: string
 }
 
-// ─── API Request Types ────────────────────────────────────
-
+//request
 export interface SubmitBatchRequest {
   urls: string[]
 }
 
-// ─── API Response Types ───────────────────────────────────
-
+//response
 export interface BatchListResponse {
   batches: Batch[]
 }
