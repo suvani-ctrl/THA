@@ -10,5 +10,8 @@
     "dev:api": "npm run dev --workspace=apps/api",
     "dev:worker": "npm run dev --workspace=apps/worker",
     "dev:web": "npm run dev --workspace=apps/web"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1"
   }
 }
