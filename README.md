@@ -34,7 +34,6 @@ Three separate processes talk to each other through Redis and PostgreSQL:
 
 Browser (Next.js :3000)
 │ SSE
-▼
 Fastify API (:4000) ──── PostgreSQL (db)
 │
 Redis
