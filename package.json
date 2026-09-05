@@ -20,4 +20,3 @@
     "dev:worker": "npm run dev --workspace=apps/worker",
     "dev:web": "npm run dev --workspace=apps/web"
   }
-}
