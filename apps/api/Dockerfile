@@ -25,5 +25,6 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
 COPY --from=builder /app/packages/shared ./packages/shared
 
+EXPOSE 4000
 
 CMD ["node", "apps/api/dist/server.js"]
