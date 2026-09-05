@@ -10,9 +10,6 @@ import {
 import { config } from '../config'
 import type { Batch, UrlResult } from '@url-checker/shared'
 
-// All batch business logic lives here
-// Routes call this service — never repositories directly
-// Service orchestrates: DB + cache + queue
 
 export const BatchService = {
 
@@ -25,23 +22,15 @@ export const BatchService = {
     try {
       await client.query('BEGIN')
 
-      // Create batch row
       const batch = await BatchRepo.create(urls.length)
 
-      // Create all url_result rows in same transaction
-      // Atomicity: batch + urls created together or not at all
       const urlResults = await UrlResultRepo.createBulk(urls, batch.id)
 
       await client.query('COMMIT')
 
-      // Enqueue jobs AFTER transaction commits
-      // If enqueue fails → batch exists in DB but no jobs
-      // Worker won't process it
-      // Trade-off: acceptable — retry endpoint handles this
       await enqueueUrlChecks(batch.id, urlResults)
       await BatchRepo.updateStatus(batch.id, 'running')
 
-      // Invalidate cache — new batch must appear in list
       await CacheService.invalidateBatchList()
 
       return { batch, urlResults }
@@ -58,16 +47,13 @@ export const BatchService = {
     limit: number,
     offset: number
   ): Promise<Batch[]> {
-    // Check cache first
     const cacheKey = config.cache.batchListKey
     const cached = await CacheService.get<Batch[]>(cacheKey)
 
     if (cached) return cached
 
-    // Cache miss — hit database
     const batches = await BatchRepo.findAll(limit, offset)
 
-    // Store in cache
     await CacheService.set(
       cacheKey,
       batches,
@@ -112,7 +98,6 @@ export const BatchService = {
       }
     }
 
-    // Phase 1: Redis flag catches in-flight jobs
     await redis.set(
       `batch:${id}:cancelled`,
       '1',
@@ -120,7 +105,6 @@ export const BatchService = {
       3600
     )
 
-    // Phase 2: DB update catches queued jobs
     await UrlResultRepo.cancelPending(id)
     await BatchRepo.updateStatus(id, 'cancelled')
     await BatchRepo.recomputeCounts(id)
