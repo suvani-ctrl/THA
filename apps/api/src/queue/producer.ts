@@ -81,19 +81,12 @@ export async function enqueueUrlChecks(
       url: urlResult.url,
     } satisfies UrlCheckJob,
     opts: {
-      /**
-       * Deterministic jobId inorder to make this enqueue idempotent.
-       */
       jobId: `url-check:${urlResult.id}`,
     },
   }))
 
   await urlCheckQueue.addBulk(jobs)
 }
-
-/**
- * Enqueue URL checks for a retry operation.
-**/
 
 export async function enqueueRetryChecks(
   batchId: string,
