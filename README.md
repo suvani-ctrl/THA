@@ -8,7 +8,7 @@ A system where you paste a list of URLs, it checks each one in the background, a
 ## Run
 
 ```bash
-docker compose up --build
+docker compose up --build -d
 ```
 
 Open http://localhost:3000
