@@ -4,6 +4,7 @@
 A system where you paste a list of URLs, it checks each one in the background, and streams the results to  browser live as they finish.
 
 ---
+![alt text](architecture.png)
 
 ## Run
 
