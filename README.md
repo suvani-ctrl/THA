@@ -66,6 +66,7 @@ Two Redis connections are used by the API because a connection in SUBSCRIBE mode
 BullMQ manages background URL checks. It provides exponential retry delays of 1, 2, and 4 seconds, limits concurrent processing to five jobs, and enforces a global rate limit of 10 requests per second. Because the rate-limit state is stored in Redis, the limit remains consistent when multiple workers are running.
 
 Finally, Server-Sent Events (SSE) are used to send live updates to browsers. Since communication is mainly server-to-client, SSE is simpler than WebSockets for this use case. Redis pub/sub allows updates to reach clients connected to different API instances without requiring sticky sessions.
+##
 ---
 
 ## Key Design Decisions
