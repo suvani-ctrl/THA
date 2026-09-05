@@ -17,10 +17,13 @@ FROM node:22-alpine AS production
 
 WORKDIR /app
 
+COPY package.json ./
+COPY packages/shared/package.json ./packages/shared/
+COPY apps/api/package.json ./apps/api/
+
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
 COPY --from=builder /app/packages/shared ./packages/shared
-COPY apps/api/package.json ./apps/api/
 
 EXPOSE 4000
 
