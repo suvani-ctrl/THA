@@ -1,122 +1,179 @@
-
 # URL Health Checker
 
-A system where you paste a list of URLs, it checks each one in the background, and streams the results to  browser live as they finish.
+Paste a list of URLs, check each one in the background, and watch the results stream into the browser as they finish.
+
+![Architecture](architecture.png)
 
 ---
-![alt text](architecture.png)
 
-## Run
+## Table of Contents
+
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Architecture](#architecture)
+- [Tech Stack and Why](#tech-stack-and-why)
+- [Key Design Decisions](#key-design-decisions)
+- [Horizontal Scaling](#horizontal-scaling)
+- [Constraints](#constraints)
+- [Trade-offs and Future Work](#trade-offs-and-future-work)
+
+---
+
+## Features
+
+- Submit up to **500 URLs** by pasting them or uploading a CSV
+- For each URL, capture the **HTTP status code**, **response time**, and **page title**
+- **Live results** in the browser as each URL finishes (SSE)
+- **Cancel** a running batch at any time
+- **Retry failed** URLs only, without re-running the ones that succeeded
+
+---
+
+## Quick Start
+
+**Prerequisites:** Docker and Docker Compose
 
 ```bash
 docker compose up --build -d
 ```
 
-Open http://localhost:3000
+Then open **http://localhost:3000**.
 
-The database schema sets itself up automatically on first run.
+The database schema is created automatically on first run.
 
----
+To stop everything:
 
-## Working
-
-- Paste up to 500 URLs or upload a CSV file
-- For each URL it captures: HTTP status code, response time, and page title
-- Results appear in the browser live as each URL finishes
-- Cancel a running batch at any point
-- Retry only the URLs that failed, without re-running the ones that already worked
+```bash
+docker compose down
+```
 
 ---
 
 ## Architecture
 
-Three separate processes talk to each other through Redis and PostgreSQL:
+The system runs as three separate processes that communicate through Redis and PostgreSQL.
 
+```
 Browser (Next.js :3000)
-│ SSE
-Fastify API (:4000) ──── PostgreSQL (db)
-│
-Redis
-│
-BullMQ Worker ────────── PostgreSQL
+        │  SSE
+        ▼
+Fastify API (:4000) ──────── PostgreSQL
+        │
+        ▼
+      Redis
+        │
+        ▼
+BullMQ Worker ────────────── PostgreSQL
+```
 
+| Process       | Port | Responsibility                              |
+|---------------|------|---------------------------------------------|
+| Next.js UI    | 3000 | Renders pages and receives live updates     |
+| Fastify API   | 4000 | Handles HTTP only. Never checks URLs.       |
+| BullMQ Worker | —    | Checks URLs only. Never handles HTTP.       |
 
-The reason for three processes is: Node.js runs on a single thread. If the API tried to check 100 URLs itself while also handling other requests, everything would block. So the API does one thing: receive the request, save it to the database, drop the work into a queue, and respond immediately. The worker runs separately and does all the actual checking.
+### Why three processes?
 
-| Process | Port | Job |
-|---------|------|-----|
-| Fastify API | 4000 | Handles HTTP only. Never checks URLs. |
-| BullMQ Worker | — | Checks URLs only. Never touches HTTP. |
-| Next.js UI | 3000 | Shows pages and receives live updates. |
+Node.js runs on a single thread. If the API checked 100 URLs itself while also serving requests, everything would block. So the API only does four things: receive the request, save it to the database, push the work onto a queue, and respond immediately. The worker runs separately and does all the actual checking.
 
 ---
 
-## Reasonings behind the technologies
+## Tech Stack and Why
 
-System Architecture
+### PostgreSQL — source of truth
 
-PostgreSQL is the primary source of truth for the system. All batches, URL results, and processing statuses are stored permanently in PostgreSQL. Redis and BullMQ are used only for temporary processing and coordination, so they can be cleared and rebuilt without losing the actual system state.
+- Stores all batches, URL results, and statuses permanently
+- Redis and BullMQ hold only temporary processing state, so they can be wiped and rebuilt without losing data
+- **Data integrity is enforced in the database:**
+  - Enums restrict status fields to valid values
+  - `CHECK` constraints keep completed counts between 0 and the total
+  - A **partial index** covers only pending URLs, so the index stays small as work completes
 
-The database also enforces data integrity. PostgreSQL enums restrict status fields to valid values, while CHECK constraints ensure that completed counts cannot be negative or exceed the total count. A partial index is used only for pending URLs, keeping the index small as URLs are processed.
+### Redis — queue storage, pub/sub, cache
 
-Redis has three main responsibilities. It stores BullMQ jobs so they can survive worker failures, provides pub/sub for distributing URL-processing updates between API instances, and caches the batch list for 30 seconds. The cache is also cleared whenever related data is modified.
+| Use      | Purpose                                                           |
+|----------|-------------------------------------------------------------------|
+| Queue    | Stores BullMQ jobs so they survive worker crashes                  |
+| Pub/Sub  | Fans out URL updates to every API instance                         |
+| Cache    | Caches the batch list for 30s, invalidated on any related write    |
 
-Two Redis connections are used by the API because a connection in SUBSCRIBE mode cannot perform normal Redis operations. One connection therefore handles caching, while the other handles pub/sub.
+The API uses **two Redis connections**, because a connection in `SUBSCRIBE` mode cannot run normal commands. One handles caching and the other handles pub/sub.
 
-BullMQ manages background URL checks. It provides exponential retry delays of 1, 2, and 4 seconds, limits concurrent processing to five jobs, and enforces a global rate limit of 10 requests per second. Because the rate-limit state is stored in Redis, the limit remains consistent when multiple workers are running.
+### BullMQ — background jobs
 
-Finally, Server-Sent Events (SSE) are used to send live updates to browsers. Since communication is mainly server-to-client, SSE is simpler than WebSockets for this use case. Redis pub/sub allows updates to reach clients connected to different API instances without requiring sticky sessions.
-##
+- Exponential retry backoff: **1s → 2s → 4s**
+- Concurrency of **5 jobs** per worker
+- Global rate limit of **10 requests/sec**, stored in Redis so it holds across multiple workers
+
+### Server-Sent Events — live updates
+
+- Traffic is almost entirely server → client, so SSE is simpler than WebSockets here
+- Combined with Redis pub/sub, updates reach clients on any API instance with **no sticky sessions** required
+
 ---
 
 ## Key Design Decisions
 
-**Idempotency on job submission.** The first time URLs are enqueued, each job gets a deterministic ID based on its database row UUID. If the same POST request hits the API twice (double-click, network retry), BullMQ sees the same job ID already exists and skips the duplicate. When the user clicks Retry Failed, a separate function is used with no job ID — because the same URL genuinely needs to be re-processed, and deduplication would silently break it.
+### 1. Idempotent job submission
 
-**Two-phase cancel.** When cancel is called, jobs are in two possible states. Queued jobs (sitting in Redis waiting to be picked up) get their database status set to cancelled — the worker checks this before starting any job. In-flight jobs (already being processed by the worker) can't be stopped by a database update alone, so a Redis flag is set that the worker checks at the very start of each job. One phase alone always misses one of these cases.
+On first enqueue, each job gets a **deterministic ID** based on its database row UUID. If the same POST arrives twice (double-click, network retry), BullMQ sees the existing job ID and skips the duplicate.
 
-**Recompute counts from source, never increment.** The batch table stores completed and failed counts. These are updated by counting directly from the url_results table using a SQL subquery, not by running `completed = completed + 1`. Incrementing would drift if a worker crashed between writing the URL result and updating the batch count. Recomputing from the actual data is always accurate regardless of what crashed.
+**Retry Failed** uses a separate enqueue path with **no job ID**, because those URLs genuinely need to run again, and deduplication would silently drop them.
 
-**Next.js server and client boundary.** The batch list page and batch detail page are server components — they fetch data on the server before the browser receives anything, so opening a batch URL in a new tab always shows the correct state immediately with no loading spinner. The live update part is a client component that receives the initial data as props and then subscribes to SSE for updates.
+### 2. Two-phase cancel
 
----
+At cancel time, a job is in one of two states:
 
-## Trade-offs Under Time Pressure
+| State       | Where it lives           | How it's cancelled                                                      |
+|-------------|--------------------------|-------------------------------------------------------------------------|
+| Queued      | Waiting in Redis          | DB status set to `cancelled`; the worker checks this before starting     |
+| In-flight   | Being processed by worker | A Redis flag is set; the worker checks it at the start of each job       |
 
-**No versioned migrations.** The schema runs once from a SQL file on first startup. If the schema ever needs to change on a running system, you'd need to write ALTER TABLE statements manually. With more time I'd use node-pg-migrate.
+Either phase alone misses one of the two cases.
 
-**Cache stampede not handled.** If the cache expires and many users hit the batch list simultaneously, all of them hit PostgreSQL at once. The fix is a Redis SET NX lock so only one request rebuilds the cache. I skipped this under time pressure.
+### 3. Recompute counts, never increment
 
-**No error classification on retries.** Right now every failed URL check is retried up to 3 times — including 404s which will never succeed. With more time I'd separate transient failures (timeouts, connection errors — retry these) from permanent ones (4xx responses — don't retry).
+Batch `completed` and `failed` counts are recalculated with a SQL subquery against `url_results` instead of `completed = completed + 1`. Incrementing drifts if a worker crashes between writing the result and updating the count. Recomputing from the source data is always correct, whatever crashed.
 
-**Hardcoded connection pool size.** The pool is set to max 10 connections per process. In production this should be calculated from the PostgreSQL max_connections setting divided by the number of running instances and set via environment variable.
+### 4. Next.js server/client boundary
 
-**No observability.** No metrics, no distributed tracing, no alerting. In production I'd add Prometheus metrics on queue depth, job processing time, and SSE connection count.
+- The **batch list** and **batch detail** pages are server components. They fetch data before anything reaches the browser, so opening a batch in a new tab shows the correct state immediately with no spinner.
+- The **live update** section is a client component. It receives the initial data as props, then subscribes to SSE.
 
 ---
 
 ## Horizontal Scaling
 
+```
 Load Balancer
-├── API Instance 1 ──┐
-├── API Instance 2 ──┼──── Redis ──── Worker(s) ──── PostgreSQL
-└── API Instance 3 ──┘
+ ├── API Instance 1 ──┐
+ ├── API Instance 2 ──┼──── Redis ──── Worker(s) ──── PostgreSQL
+ └── API Instance 3 ──┘
+```
 
-
-Running multiple API instances works without any code changes. All instances share the same PostgreSQL so state is consistent. All subscribe to the same Redis pub/sub channel, so when a worker publishes a URL update, every API instance gets it and pushes it to their connected browsers. It doesn't matter which instance a user's browser connected to.
-
-The rate limit stays globally correct because the counter lives in Redis, not in any process's memory.
-
-Considerationf or connection pool sizing. At `max: 10` per instance, 10 API instances would hit PostgreSQL's default limit of 100 connections. At that scale I'd put PgBouncer in front of PostgreSQL as a better connection pooler.
-
-Worker concurrency is per process (5 each). Running two workers gives 10 simultaneous checks. The global rate limit of 10 req/sec still holds because it's enforced in Redis.
+- **Multiple API instances** work with no code changes. They share PostgreSQL, and all subscribe to the same Redis channel, so every instance receives every update and pushes it to its own connected browsers.
+- **Rate limiting** stays globally correct because the counter lives in Redis, not in process memory.
+- **Workers** scale by adding processes. Concurrency is per process (5 each), so two workers give 10 parallel checks, while the 10 req/sec global limit still holds.
+- **Connection pooling:** at `max: 10` per instance, 10 API instances would reach PostgreSQL's default limit of 100 connections. At that scale, PgBouncer would go in front of PostgreSQL.
 
 ---
 
-## Considerations
+## Constraints
 
-- Only http:// and https:// URLs are accepted
-- Max URL length is 2048 characters
-- Page titles are only extracted from text/html responses with 2xx status codes
-- Cancel is immediate for queued jobs. Inflight jobs may finish within a few milliseconds of cancel being called & this is acceptable
+- Only `http://` and `https://` URLs are accepted
+- Maximum URL length is **2048** characters
+- Page titles are extracted only from `text/html` responses with a **2xx** status
+- Cancel is immediate for queued jobs. In-flight jobs may finish a few milliseconds after cancel, which is acceptable.
 - Auth, notifications, and UI polish are out of scope per the brief
+
+---
+
+## Trade-offs and Future Work
+
+| Area                   | Current state                                        | With more time                                                                 |
+|------------------------|------------------------------------------------------|--------------------------------------------------------------------------------|
+| Migrations             | Schema runs once from a SQL file on first startup     | Versioned migrations with `node-pg-migrate`                                    |
+| Cache stampede         | Not handled; an expired cache sends all requests to PostgreSQL | Redis `SET NX` lock so only one request rebuilds the cache              |
+| Retry classification   | Every failure retried 3 times, including 404s         | Retry transient errors (timeouts, connection errors); skip permanent 4xx       |
+| Connection pool size   | Hardcoded to 10 per process                           | Derived from `max_connections` ÷ instance count, set via env variable          |
+| Observability          | None                                                  | Prometheus metrics for queue depth, job duration, and SSE connection count     |
