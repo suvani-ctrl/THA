@@ -2,7 +2,7 @@
 
 Paste a list of URLs (or upload a CSV), and each one gets checked in the background. Results stream to the browser as they come in: status code, response time and page title.
 
-## Running it
+## Running
 
 ```bash
 docker compose up --build -d
@@ -10,15 +10,14 @@ docker compose up --build -d
 
 UI is at http://localhost:3000, API at http://localhost:4000. The schema gets created on first startup.
 
-## What it does
+## Working
 
 - Up to 500 URLs per batch, pasted or from CSV
 - Live results over SSE
 - Cancel a batch mid-run
 - Retry only the failed URLs
 
-## How it's put together
-
+## Architecture
 ```
 Next.js (3000) --SSE--> Fastify API (4000) ---- Postgres
                               |
@@ -33,7 +32,7 @@ Postgres is the source of truth. Redis only holds the queue, pub/sub for live up
 
 Worker settings: concurrency 5, retries with 1s/2s/4s backoff, and a 10 req/s rate limit. The limit is stored in Redis, so it stays global when you run more than one worker.
 
-## Some decisions worth knowing
+##Design decisions
 
 **Duplicate submits.** Initial jobs use the URL row's UUID as the job ID, so a double-submitted request doesn't queue anything twice. Retry-failed deliberately skips the job ID, since those URLs do need to run again.
 
